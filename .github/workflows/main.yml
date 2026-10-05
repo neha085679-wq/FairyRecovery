@@ -1,0 +1,200 @@
+name: Fairy Recovery CI Builder (duchamp vendor_boot)
+
+on:
+  workflow_dispatch:
+    inputs:
+      DEVICE_TREE_URL:
+        description: 'Device Tree GitHub Repo URL'
+        required: true
+        default: 'https://github.com/cdpcrp/custom_recovery_tree_xiaomi_duchamp.git'
+      DEVICE_TREE_BRANCH:
+        description: 'Device Tree Branch'
+        required: true
+        default: 'twrp-12.1'
+      DEVICE_PATH:
+        description: 'Device Tree Destination Path'
+        required: true
+        default: 'device/xiaomi/duchamp'
+      DEVICE_NAME:
+        description: 'Device Codename'
+        required: true
+        default: 'duchamp'
+      MANIFEST_BRANCH:
+        description: 'Recovery Manifest Branch'
+        required: true
+        default: 'twrp-12.1'
+      BUILD_TARGET:
+        description: 'Build Target'
+        required: true
+        default: 'vendorbootimage'
+
+jobs:
+  build:
+    name: Build Fairy Recovery for Poco X6 Pro (duchamp)
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Free Disk Space on Ubuntu Runner
+        run: |
+          echo "[+] Optimizing disk space for Android compile..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -a -f
+          df -h
+
+      - name: Setup Build Dependencies & Tools
+        run: |
+          sudo apt update -y
+          sudo apt install -y git-core gnupg flex bison build-essential zip curl zlib1g-dev \
+            gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses5-dev x11proto-core-dev \
+            libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
+            python3 python3-pip rsync
+          sudo curl --create-dirs -L -o /usr/local/bin/repo -O -L https://storage.googleapis.com/git-repo-downloads/repo
+          sudo chmod a+rx /usr/local/bin/repo
+          git config --global user.name "FairyCI"
+          git config --global user.email "fairyci@build.local"
+
+      - name: Sync Minimal Recovery Manifest
+        run: |
+          mkdir -p ~/recovery_workspace
+          cd ~/recovery_workspace
+          echo "[+] Initializing manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}..."
+          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${{ github.event.inputs.MANIFEST_BRANCH }} --depth=1
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+
+      - name: Clone duchamp Device Tree
+        run: |
+          cd ~/recovery_workspace
+          echo "[+] Cloning device tree..."
+          git clone --depth=1 ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ${{ github.event.inputs.DEVICE_PATH }}
+
+      - name: Inject Fairy Recovery Liquid Glass UI & Flags
+        run: |
+          cd ~/recovery_workspace
+          DEV_DIR="${{ github.event.inputs.DEVICE_PATH }}"
+          THEME_DIR="$DEV_DIR/theme"
+          mkdir -p "$THEME_DIR"
+
+          # 1. Create Embedded Liquid Glass UI XML
+          cat << 'EOF' > "$THEME_DIR/fairy_ui.xml"
+          <?xml version="1.0" encoding="utf-8"?>
+          <recovery>
+              <details>
+                  <title>Fairy Recovery</title>
+                  <version>v1.0.0-LiquidGlass</version>
+                  <author>Chef &amp; 29exop</author>
+                  <date>2026</date>
+                  <themeversion>1</themeversion>
+              </details>
+              <colors>
+                  <color name="abyss_base" value="#0A0C16" />
+                  <color name="glass_card_bg" value="#1A1F3873" />
+                  <color name="glass_border" value="#FFFFFF2E" />
+                  <color name="glass_border_active" value="#00F2FE80" />
+                  <color name="fairy_cyan" value="#00F2FE" />
+                  <color name="fairy_violet" value="#9B51E0" />
+                  <color name="fairy_emerald" value="#00F5A0" />
+                  <color name="text_bright" value="#FFFFFF" />
+                  <color name="text_muted" value="#8F9CAE" />
+              </colors>
+              <pages>
+                  <page name="main">
+                      <background color="abyss_base" />
+                      <text>
+                          <placement x="540" y="120" align="center" />
+                          <font color="fairy_cyan" />
+                          <text>FAIRY RECOVERY</text>
+                      </text>
+                  </page>
+              </pages>
+          </recovery>
+          EOF
+
+          # 2. Patch Branding Strings in Core
+          sed -i 's/TWRP/Fairy Recovery/g' bootable/recovery/recovery.cpp 2>/dev/null || true
+          sed -i 's/Team Win Recovery Project/Fairy Recovery - Liquid Glass UI/g' bootable/recovery/variables.h 2>/dev/null || true
+
+          # 3. Append Fairy Flags to BoardConfig.mk
+          BOARD_CONFIG="$DEV_DIR/BoardConfig.mk"
+          cat << 'EOF' >> "$BOARD_CONFIG"
+
+          # --- FAIRY RECOVERY INJECTED FLAGS ---
+          TARGET_RECOVERY_DEVICE_NAME := duchamp
+          PRODUCT_NAME := fairy_duchamp
+          RECOVERY_VARIANT := fairy
+          FAIRY_RECOVERY_VERSION := 1.0.0
+          BOARD_BOOT_HEADER_VERSION := 4
+          BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT := true
+          BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT := true
+          BOARD_BUILD_VENDOR_BOOTIMAGE := true
+          TW_CUSTOM_THEME := device/xiaomi/duchamp/theme/fairy_ui.xml
+          EOF
+          echo "[+] Theme and flags injected cleanly into $DEV_DIR"
+
+      - name: Compile Fairy Recovery (vendor_boot)
+        run: |
+          cd ~/recovery_workspace
+          source build/envsetup.sh
+          CODENAME="${{ github.event.inputs.DEVICE_NAME }}"
+          TARGET="${{ github.event.inputs.BUILD_TARGET }}"
+          
+          echo "[+] Lunching device: $CODENAME..."
+          lunch "twrp_${CODENAME}-eng" || lunch "omni_${CODENAME}-eng"
+          
+          echo "[+] Compiling $TARGET..."
+          mka "$TARGET" -j$(nproc --all)
+
+      - name: Prepare Release Artifact
+        id: prepare_release
+        run: |
+          cd ~/recovery_workspace
+          CODENAME="${{ github.event.inputs.DEVICE_NAME }}"
+          OUTPUT_DIR="out/target/product/$CODENAME"
+          
+          mkdir -p "$GITHUB_WORKSPACE/release"
+          if [ -f "$OUTPUT_DIR/vendor_boot.img" ]; then
+            cp "$OUTPUT_DIR/vendor_boot.img" "$GITHUB_WORKSPACE/release/FairyRecovery_${CODENAME}_vendor_boot.img"
+            echo "IMG_NAME=FairyRecovery_${CODENAME}_vendor_boot.img" >> $GITHUB_ENV
+            echo "STATUS=success" >> $GITHUB_ENV
+          elif [ -f "$OUTPUT_DIR/recovery.img" ]; then
+            cp "$OUTPUT_DIR/recovery.img" "$GITHUB_WORKSPACE/release/FairyRecovery_${CODENAME}_recovery.img"
+            echo "IMG_NAME=FairyRecovery_${CODENAME}_recovery.img" >> $GITHUB_ENV
+            echo "STATUS=success" >> $GITHUB_ENV
+          else
+            echo "[-] Build artifact not found in $OUTPUT_DIR"
+            exit 1
+          fi
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FairyRecovery-${{ github.event.inputs.DEVICE_NAME }}
+          path: release/*
+
+      - name: Create GitHub Release with Compiled vendor_boot.img
+        uses: softprops/action-gh-release@v2
+        if: env.STATUS == 'success'
+        with:
+          tag_name: Fairy-Recovery-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
+          name: Fairy Recovery for Poco X6 Pro (${{ github.event.inputs.DEVICE_NAME }})
+          body: |
+            ## Fairy Recovery (Liquid Glass UI) 🧚✨
+            - **Device**: Xiaomi Poco X6 Pro / Redmi K70E (`duchamp`)
+            - **SoC**: MediaTek Dimensity 8300-Ultra (`mt6897`)
+            - **Partition**: `vendor_boot` (Header v4)
+            - **UI Engine**: Liquid Glass UI
+            
+            ### Flash Instructions:
+            1. Phone ko Fastboot mode me connect karo.
+            2. Run command:
+            ```bash
+            fastboot flash vendor_boot ${{ env.IMG_NAME }}
+            fastboot reboot recovery
+            ```
+          files: release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
