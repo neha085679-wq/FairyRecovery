@@ -72,68 +72,25 @@ jobs:
           echo "[+] Cloning device tree..."
           git clone --depth=1 ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ${{ github.event.inputs.DEVICE_PATH }}
 
-      - name: Inject Fairy Recovery Liquid Glass UI & Flags
+      - name: Inject Fairy Recovery Branding & Theme
         run: |
           cd ~/recovery_workspace
           DEV_DIR="${{ github.event.inputs.DEVICE_PATH }}"
-          THEME_DIR="$DEV_DIR/theme"
-          mkdir -p "$THEME_DIR"
 
-          # 1. Create Embedded Liquid Glass UI XML
-          cat << 'EOF' > "$THEME_DIR/fairy_ui.xml"
-          <?xml version="1.0" encoding="utf-8"?>
-          <recovery>
-              <details>
-                  <title>Fairy Recovery</title>
-                  <version>v1.0.0-LiquidGlass</version>
-                  <author>Chef &amp; 29exop</author>
-                  <date>2026</date>
-                  <themeversion>1</themeversion>
-              </details>
-              <colors>
-                  <color name="abyss_base" value="#0A0C16" />
-                  <color name="glass_card_bg" value="#1A1F3873" />
-                  <color name="glass_border" value="#FFFFFF2E" />
-                  <color name="glass_border_active" value="#00F2FE80" />
-                  <color name="fairy_cyan" value="#00F2FE" />
-                  <color name="fairy_violet" value="#9B51E0" />
-                  <color name="fairy_emerald" value="#00F5A0" />
-                  <color name="text_bright" value="#FFFFFF" />
-                  <color name="text_muted" value="#8F9CAE" />
-              </colors>
-              <pages>
-                  <page name="main">
-                      <background color="abyss_base" />
-                      <text>
-                          <placement x="540" y="120" align="center" />
-                          <font color="fairy_cyan" />
-                          <text>FAIRY RECOVERY</text>
-                      </text>
-                  </page>
-              </pages>
-          </recovery>
-          EOF
-
-          # 2. Patch Branding Strings in Core
+          # 1. Patch Branding Strings in Core
           sed -i 's/TWRP/Fairy Recovery/g' bootable/recovery/recovery.cpp 2>/dev/null || true
           sed -i 's/Team Win Recovery Project/Fairy Recovery - Liquid Glass UI/g' bootable/recovery/variables.h 2>/dev/null || true
 
-          # 3. Append Fairy Flags to BoardConfig.mk
+          # 2. Append Safe Fairy Recovery Flags (WITHOUT read-only PRODUCT_NAME)
           BOARD_CONFIG="$DEV_DIR/BoardConfig.mk"
           cat << 'EOF' >> "$BOARD_CONFIG"
 
-          # --- FAIRY RECOVERY INJECTED FLAGS ---
-          TARGET_RECOVERY_DEVICE_NAME := duchamp
-          PRODUCT_NAME := fairy_duchamp
-          RECOVERY_VARIANT := fairy
-          FAIRY_RECOVERY_VERSION := 1.0.0
-          BOARD_BOOT_HEADER_VERSION := 4
-          BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT := true
-          BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT := true
-          BOARD_BUILD_VENDOR_BOOTIMAGE := true
-          TW_CUSTOM_THEME := device/xiaomi/duchamp/theme/fairy_ui.xml
-          EOF
-          echo "[+] Theme and flags injected cleanly into $DEV_DIR"
+# --- FAIRY RECOVERY INJECTED FLAGS ---
+RECOVERY_VARIANT := fairy
+FAIRY_RECOVERY_VERSION := 1.0.0
+TW_DEVICE_VERSION := Fairy-1.0-LiquidGlass
+EOF
+          echo "[+] Fairy flags appended cleanly."
 
       - name: Compile Fairy Recovery (vendor_boot)
         run: |
@@ -142,8 +99,8 @@ jobs:
           CODENAME="${{ github.event.inputs.DEVICE_NAME }}"
           TARGET="${{ github.event.inputs.BUILD_TARGET }}"
           
-          echo "[+] Lunching device: $CODENAME..."
-          lunch "twrp_${CODENAME}-eng" || lunch "omni_${CODENAME}-eng"
+          echo "[+] Lunching device target..."
+          lunch "twrp_${CODENAME}-eng" || lunch "twrp_${CODENAME}-userdebug" || lunch "omni_${CODENAME}-eng"
           
           echo "[+] Compiling $TARGET..."
           mka "$TARGET" -j$(nproc --all)
